@@ -1,0 +1,8 @@
+annoy==1.17.3
+matplotlib==3.8.3
+numpy==1.26.4
+pandas==2.2.2
+pymilvus==2.4.0
+scikit_learn==1.4.1.post1
+torch==2.2.1
+tqdm==4.66.2
