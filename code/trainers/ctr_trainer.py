@@ -68,8 +68,9 @@ class CTRTrainer(object):
             x_dict = {k: v.to(self.device) for k, v in x_dict.items()}  
             y = y.to(self.device)
 
-            y_pred,loss_un,_,_,_ = self.model(x_dict)
-            loss = 0.1*loss_un+self.criterion(y_pred, y.float())
+            y_pred,loss_un,loss_syn,_,_ = self.model(x_dict)
+            loss_syn = (y * loss_syn).sum()/y.shape[0]
+            loss = 0.1*loss_un+self.criterion(y_pred, y.float())+0.05*loss_syn
             self.model.zero_grad()
             loss.backward()
             self.optimizer.step()

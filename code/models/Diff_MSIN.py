@@ -65,8 +65,8 @@ class Diff_MSIN(nn.Module):
         self.mlp_embedding_dim = output_dim 
 
         self.rule_n = 1 
-        self.rule_len = 3
-        self.public_expert_num = 2
+        self.expert_nets = 3
+        self.common_expert_num = 1
         self.multihot_f_num = 1
         self.operator_n = 1 
 
@@ -78,7 +78,7 @@ class Diff_MSIN(nn.Module):
         self.num_history_features = len(history_features)
         self.num_self_embedding_history_features = len(self_embedding_history_features)
 
-        self.mlp = MLP(2*output_dim + 100*(self.rule_len+self.public_expert_num)-250, activation="dice", **mlp_params) # 
+        self.mlp = MLP(2*output_dim + 100*(self.expert_nets+self.common_expert_num)-150, activation="dice", **mlp_params) # 
         self.embedding = EmbeddingLayer(features + history_features + target_features)
 
         self.text_embedding = nn.Embedding.from_pretrained(config.embedding_pretrained_text, freeze=False).float()
@@ -104,15 +104,17 @@ class Diff_MSIN(nn.Module):
 
 
         self.tree_layers = [1]
-        for l in range(1, self.rule_len):
+        for l in range(1, self.expert_nets):
             self.tree_layers.append(self.tree_layers[-1] * 2)
         self.node_n = sum(self.tree_layers) 
 
-        self.blto_layers = nn.ModuleList([BeToNet(2*output_dim) for i in range(self.rule_len)])
+        self.blto_layers = nn.ModuleList([BeToNet(2*output_dim) for i in range(self.expert_nets)])
 
         self.set_presentaions = self.sample_set_presentaions()
 
         self.Fusion = TensorFusion()
+
+        self.src_module = SRCModule(T=12).cuda()
 
         self._ = [
         nn.Sequential(
@@ -135,7 +137,7 @@ class Diff_MSIN(nn.Module):
             nn.Linear(512, 2*512),
             nn.ReLU(),
             nn.Linear(2*512, 512)
-        ).to("cuda:0") for _ in range(self.rule_len)
+        ).to("cuda:0") for _ in range(self.expert_nets)
         ]
 
         self.public_expert_net = [
@@ -143,7 +145,7 @@ class Diff_MSIN(nn.Module):
             nn.Linear(512, 2*512),
             nn.ReLU(),
             nn.Linear(2*512, 512)
-        ).to("cuda:0") for _ in range(self.public_expert_num)
+        ).to("cuda:0") for _ in range(self.common_expert_num)
         ]
 
         self.modality_fusion = nn.Sequential(
@@ -235,31 +237,31 @@ class Diff_MSIN(nn.Module):
         prefer_presentations = []
         target_presentations = []
         
-        for m in range(self.rule_len): 
+        for m in range(self.expert_nets): 
             prefer_presentation = target_tensor[:,m]
             prefer_low_capsule = self.interest_extract_list[m](low_capsule[:,m])+low_capsule[:,m]
             prefer_presentations.append(prefer_low_capsule.unsqueeze(1))
             target_presentations.append(prefer_presentation.unsqueeze(1))
-            #score = self.fuhao[0](prefer_low_capsule*prefer_presentation).sum(dim=-1)
-            #scores.append(score.unsqueeze(1))
 
         low_capsule_fusion = torch.mean(low_capsule,dim=1).unsqueeze(1)
         target_tensor_fusion = torch.mean(target_tensor,dim=1).unsqueeze(1)
 
-        for m in range(self.public_expert_num): 
-            prefer_presentation = target_tensor_fusion#self.public_expert_net[m](target_tensor)+target_tensor
+        for m in range(self.common_expert_num): 
+            prefer_presentation = target_tensor_fusion
             prefer_low_capsule = self.public_expert_net[m](low_capsule_fusion)+low_capsule_fusion
             prefer_presentations.append(prefer_low_capsule)
             target_presentations.append(prefer_presentation)
-            #score = self.fuhao[0](prefer_low_capsule*prefer_presentation).sum(dim=-1)
-            #scores.append(score.unsqueeze(1))
         
         prefer_presentations = torch.cat(prefer_presentations,dim=1)
+        h_syn = self.src_module(prefer_presentations).unsqueeze(1)+low_capsule_fusion
+        loss_syn = self.src_module.loss_syn(h_syn, target_tensor_fusion)
+
+        prefer_presentations = torch.cat([prefer_presentations,h_syn],dim=1)
+        target_presentations.append(prefer_presentation)
         prefer_presentations = self.cross_net(prefer_presentations)
         target_presentations = torch.cat(target_presentations,dim=1)
         attention_score = self.attention(prefer_presentations, target_presentations)
         score = self.cal_score[0](attention_score*prefer_presentations*target_presentations).sum(dim=-1)
-
         loss_con = self.calculate_mean_cosine_distance(prefer_presentations)
 
         mlp_in = torch.cat([
@@ -271,7 +273,7 @@ class Diff_MSIN(nn.Module):
         
         y = self.mlp(mlp_in.flatten(start_dim=1))
 
-        return torch.sigmoid(y.squeeze(1)),loss_con,0,0,0
+        return torch.sigmoid(y.squeeze(1)),loss_con,loss_syn,0,0
 
     def attention(self, prefer_presentations, target_presentations):
         target_presentations = target_presentations.expand(-1, -1, prefer_presentations.size(2), -1)
@@ -370,19 +372,19 @@ class Diff_MSIN(nn.Module):
     
     def sample_set_presentaions(self):
 
-        set_presentaions = torch.empty(self.rule_len, self.output_dim)
+        set_presentaions = torch.empty(self.expert_nets, self.output_dim)
  
-        vectors = torch.randn(self.rule_len, self.output_dim)
+        vectors = torch.randn(self.expert_nets, self.output_dim)
         
         orthogonal_vectors, _ = torch.linalg.qr(vectors.T)
         
         orthogonal_vectors = orthogonal_vectors.T
         
         finished_set = []
-        while len(finished_set) != self.rule_len:
+        while len(finished_set) != self.expert_nets:
             sample_set_presentaion = torch.randn(self.output_dim)
             r_list = []
-            for rl in range(self.rule_len):
+            for rl in range(self.expert_nets):
                 r = self.blto_layers[rl](torch.cat([sample_set_presentaion, orthogonal_vectors[rl]]))
                 r_list.append(r)
             
@@ -571,3 +573,146 @@ class MultiheadAttention(nn.Module):
         output = self.W_o(attended_values)
 
         return output
+
+from math import sqrt
+
+class CrossModalAttention(nn.Module):
+    def __init__(self, dim=512):
+        super().__init__()
+        self.query = nn.Linear(dim, dim)
+        self.key = nn.Linear(dim, dim)
+        self.value = nn.Linear(dim, dim)
+        self.scale = dim ** -0.5
+        self.gamma = nn.Parameter(torch.zeros(1))
+        
+    def forward(self, x1, x2):
+        q = self.query(x1)  # [B, L1, D]
+        k = self.key(x2)    # [B, L2, D]
+        v = self.value(x2)  # [B, L2, D]
+        
+        attn = torch.bmm(q, k.transpose(1, 2)) * self.scale  # [B, L1, L2]
+        attn = F.softmax(attn, dim=-1)
+        
+        out = torch.bmm(attn, v)  # [B, L1, D]
+        return self.gamma * out + x1
+
+class SRCModule(nn.Module):
+    def __init__(self, T=10, dim=512):
+        super().__init__()
+        self.T = T
+        self.dim = dim
+        self.eps = 1e-8 
+
+        angles = torch.linspace(0, 0.9*(torch.pi/2), T+1) 
+        self.register_buffer('alpha_bars', torch.cos(angles)**2)
+        self.alphas = self.alpha_bars[1:] / (self.alpha_bars[:-1] + self.eps) 
+        
+        self.alpha_im2te = nn.Parameter(torch.ones(1)*0.5)
+        self.alpha_im2id = nn.Parameter(torch.ones(1)*0.5)
+        self.alpha_te2im = nn.Parameter(torch.ones(1)*0.5)
+        self.alpha_te2id = nn.Parameter(torch.ones(1)*0.5)
+        self.alpha_id2im = nn.Parameter(torch.ones(1)*0.5)
+        self.alpha_id2te = nn.Parameter(torch.ones(1)*0.5)
+        
+        self.fusion_mlp = nn.Sequential(
+            nn.Linear(3*dim, 2*dim),
+            nn.GELU(),
+            nn.Linear(2*dim, dim)
+        )
+        for layer in self.fusion_mlp:
+            if isinstance(layer, nn.Linear):
+                nn.init.xavier_normal_(layer.weight)
+                nn.init.constant_(layer.bias, 0.1)
+        
+        self.attn_im_te = CrossModalAttention(dim)
+        self.attn_im_id = CrossModalAttention(dim)
+        self.attn_te_im = CrossModalAttention(dim)
+        self.attn_te_id = CrossModalAttention(dim)
+        self.attn_id_im = CrossModalAttention(dim)
+        self.attn_id_te = CrossModalAttention(dim)
+
+    def forward_diffusion(self, h, t):
+        batch_size, seq_len, _ = h.shape
+        noise = torch.randn_like(h)
+        alpha_t = self.alphas[t]
+        return (h * torch.sqrt(alpha_t + self.eps) 
+                + noise * torch.sqrt(torch.clamp(1 - alpha_t, min=self.eps))), noise
+
+    def reverse_diffusion(self, h_m, h_others, t):
+        alpha_t = self.alphas[t]
+        bar_alpha_t = self.alpha_bars[t]
+        
+        eps_pred = 0.0
+        for h_n, alpha_param in h_others:
+            alpha = torch.sigmoid(alpha_param) 
+            eps_pred += alpha * self.ci_interaction(h_m, h_n)
+        
+        denominator = torch.sqrt(torch.clamp(alpha_t, min=self.eps))
+        factor = (1 - alpha_t) / torch.sqrt(torch.clamp(1 - bar_alpha_t, min=self.eps))
+        
+        return (h_m - factor * eps_pred) / denominator
+    
+    def ci_interaction(self, h_m, h_n):
+        if h_m.size(1) == h_n.size(1): 
+            attn_output = self.attn_im_te(h_m, h_n)
+            return attn_output
+        else:  
+            pooled_n = h_n.mean(dim=1, keepdim=True)  
+            
+            q = h_m  # [B, L1, D]
+            k = pooled_n.expand(-1, h_m.size(1), -1)  # [B, L1, D]
+            v = pooled_n.expand(-1, h_m.size(1), -1)  # [B, L1, D]
+            
+            # 手动实现注意力
+            attn = torch.bmm(q, k.transpose(1,2)) * (q.size(-1)**-0.5)
+            attn = F.softmax(attn, dim=-1)
+            return torch.bmm(attn, v)
+    
+    def forward(self, prefer_presentations):
+
+        h_im = prefer_presentations[:, 0]  # [B, 50, 512]
+        h_te = prefer_presentations[:, 1]  
+        h_id = prefer_presentations[:, 2]  
+        
+        h_im_hist = [h_im]
+        h_te_hist = [h_te]
+        h_id_hist = [h_id]
+        
+        for t in range(self.T):
+            h_im_noisy, _ = self.forward_diffusion(h_im_hist[-1], t)
+            h_te_noisy, _ = self.forward_diffusion(h_te_hist[-1], t)
+            h_id_noisy, _ = self.forward_diffusion(h_id_hist[-1], t)
+            
+            h_im_new = self.reverse_diffusion(
+                h_im_noisy, 
+                [(h_te_noisy, self.alpha_te2im), 
+                 (h_id_noisy, self.alpha_id2im)], t)
+            h_te_new = self.reverse_diffusion(
+                h_te_noisy,
+                [(h_im_noisy, self.alpha_im2te),
+                 (h_id_noisy, self.alpha_id2te)], t)
+            h_id_new = self.reverse_diffusion(
+                h_id_noisy,
+                [(h_im_noisy, self.alpha_im2id),
+                 (h_te_noisy, self.alpha_te2id)], t)
+            
+            h_im_hist.append(h_im_new)
+            h_te_hist.append(h_te_new)
+            h_id_hist.append(h_id_new)
+        
+        h_im_final = h_im_hist[-1] # [B, dim]
+        h_te_final = h_te_hist[-1]
+        h_id_final = h_id_hist[-1]
+
+        h_syn = self.fusion_mlp(torch.cat([
+            h_im_final, h_te_final, h_id_final
+        ], dim=-1))
+        
+        return h_syn
+    
+    def loss_syn(self, h_syn, E_target):
+        E_target = E_target.squeeze(1).squeeze(1)  # 去掉多余的维度
+        h_syn = h_syn.squeeze(1)
+        cos_sim = F.cosine_similarity(h_syn.mean(dim=1), E_target, dim=-1)
+        cos_sim_clamped = torch.clamp(cos_sim, min=0)
+        return cos_sim_clamped

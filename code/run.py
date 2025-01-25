@@ -71,7 +71,7 @@ def main(config, dataset_path, model_name, epoch, learning_rate, batch_size, wei
     features, target_features, history_features, self_embedding_features, target_embedding_features, self_embedding_history_features, train_x, train_y, test_x, test_y = get_data_dict(dataset_path)
     dg = DataGenerator(train_x, train_y)
     train_dataloader, val_dataloader, test_dataloader = dg.generate_dataloader(x_test=test_x, y_test=test_y, batch_size=batch_size)
-    if model_name == "RDCMF":
+    if model_name == "Diff-MSIN":
         model = Diff_MSIN(config, features=features, history_features=history_features, target_features=target_features, self_embedding_features=self_embedding_features, self_embedding_history_features=self_embedding_history_features,
                      input_seq_len=50,input_dim=512,output_dim=512,iteration=1,output_seq_len=3, mlp_params={"dims": [256, 128]},attention_mlp_params={"dims": [256, 128]},
                      )
@@ -88,8 +88,8 @@ def main(config, dataset_path, model_name, epoch, learning_rate, batch_size, wei
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset_path', default="../data/Ama/home/") 
-    parser.add_argument('--model_name', default='RDCMF') 
+    parser.add_argument('--dataset_path', default="../data/Ama/arts/") 
+    parser.add_argument('--model_name', default='Diff-MSIN') 
     parser.add_argument('--epoch', type=int, default=15)  
     parser.add_argument('--learning_rate', type=float, default=1e-3)
     parser.add_argument('--batch_size', type=int, default=128)  
