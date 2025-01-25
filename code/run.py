@@ -13,13 +13,7 @@ from Config import Config
 from importlib import import_module
 
 def df_to_dict(data):
-    """
-    Convert the DataFrame to a dict type input that the network can accept
-    Args:
-        data (pd.DataFrame): datasets of type DataFrame
-    Returns:
-        The converted dict, which can be used directly into the input network
-    """
+
     data_dict = data.to_dict('list')
     for key in data.keys():
         data_dict[key] = np.array(data_dict[key])

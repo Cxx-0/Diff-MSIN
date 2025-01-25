@@ -228,11 +228,7 @@ class Diff_MSIN(nn.Module):
         low_capsule = torch.cat([low_capsule_image.unsqueeze(1), low_capsule_text.unsqueeze(1), embed_x_history.unsqueeze(1)],dim=1)
         concat_self_embedding_features_without_mlp = torch.cat([concat_self_embedding_features_without_mlp, embed_x_target], dim=1)
         target_tensor = self.Norm(concat_self_embedding_features_without_mlp.unsqueeze(2))
-        '''
-        prefer_presentation = target_tensor
-        prefer_low_capsule = self.interest_extract_list[0](low_capsule)+low_capsule
-        score = self.fuhao[0](prefer_presentation*prefer_low_capsule).sum(dim=-1)
-        '''
+
         scores = []
         prefer_presentations = []
         target_presentations = []
@@ -278,30 +274,18 @@ class Diff_MSIN(nn.Module):
     def attention(self, prefer_presentations, target_presentations):
         target_presentations = target_presentations.expand(-1, -1, prefer_presentations.size(2), -1)
 
-        # 计算点积注意力分数
         attention_scores = torch.matmul(prefer_presentations, target_presentations.transpose(-1, -2))
         attention_weights = F.softmax(attention_scores, dim=-1)
 
-        # 计算加权的prefer_presentations
         weighted_prefer = torch.matmul(attention_weights, prefer_presentations)
         return weighted_prefer
 
     def cross_net(self, history_tensor):
-        """
-        对历史信息张量的第二维进行两两交互。
-        
-        参数:
-            history_tensor (torch.Tensor): 历史信息张量，形状为 [128, 5, 50, 512]。
-        
-        返回:
-            torch.Tensor: 两两交互的结果，形状为 [128, 50, 512]。
-        """
+
         batch_size, num_fields, sequence_length, embedding_size = history_tensor.size()
         
-        # 扩展张量以进行两两交互
         expanded_tensor = history_tensor.view(batch_size, num_fields, 1, sequence_length, embedding_size) * history_tensor.view(batch_size, 1, num_fields, sequence_length, embedding_size)
         
-        # 求和所有交互的结果
         interaction_sum = 0.1*expanded_tensor.mean(dim=2) + history_tensor
         
         return interaction_sum
@@ -347,7 +331,6 @@ class Diff_MSIN(nn.Module):
         attention_scores = torch.matmul(prefer_presentations, target_presentations.transpose(-1, -2))
         attention_weights = F.softmax(attention_scores, dim=-1)
         
-        # 计算加权的target_presentations
         weighted_target = torch.matmul(attention_weights, target_presentations)
         weighted_target
 
@@ -663,7 +646,6 @@ class SRCModule(nn.Module):
             k = pooled_n.expand(-1, h_m.size(1), -1)  # [B, L1, D]
             v = pooled_n.expand(-1, h_m.size(1), -1)  # [B, L1, D]
             
-            # 手动实现注意力
             attn = torch.bmm(q, k.transpose(1,2)) * (q.size(-1)**-0.5)
             attn = F.softmax(attn, dim=-1)
             return torch.bmm(attn, v)
@@ -711,7 +693,7 @@ class SRCModule(nn.Module):
         return h_syn
     
     def loss_syn(self, h_syn, E_target):
-        E_target = E_target.squeeze(1).squeeze(1)  # 去掉多余的维度
+        E_target = E_target.squeeze(1).squeeze(1) 
         h_syn = h_syn.squeeze(1)
         cos_sim = F.cosine_similarity(h_syn.mean(dim=1), E_target, dim=-1)
         cos_sim_clamped = torch.clamp(cos_sim, min=0)
