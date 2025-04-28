@@ -207,25 +207,25 @@ class Diff_MSIN(nn.Module):
                 sparse_emb_mlp.append(self.image_embedding_mlp(image_emb))
         concat_self_embedding_features_without_mlp = torch.cat(sparse_emb, dim=1) 
 
-        low_capsule = concat_self_embedding_hist_features_without_mlp[:,0,:,:]  
-        embed_x_history = low_capsule  
+        embed_x_history = concat_self_embedding_hist_features_without_mlp[:,0,:,:]  
+        embed_x_history = embed_x_history  
 
-        B, _, _ = low_capsule.size() 
+        B, _, _ = embed_x_history.size() 
         assert self.iteration >= 1
         for i in range(self.iteration):
-            low_capsule_new = squash(low_capsule)
+            embed_x_history_new = squash(embed_x_history)
 
-        low_capsule_image = low_capsule_new
+        embed_x_history_image = embed_x_history_new
 
-        low_capsule = concat_self_embedding_hist_features_without_mlp[:,1,:,:]  
-        embed_x_history = low_capsule  
-        B, _, _ = low_capsule.size() 
+        embed_x_history = concat_self_embedding_hist_features_without_mlp[:,1,:,:]  
+        embed_x_history = embed_x_history  
+        B, _, _ = embed_x_history.size() 
         assert self.iteration >= 1
         for i in range(self.iteration):
-            low_capsule_new = squash(low_capsule)
+            embed_x_history_new = squash(embed_x_history)
         
-        low_capsule_text = low_capsule_new
-        low_capsule = torch.cat([low_capsule_image.unsqueeze(1), low_capsule_text.unsqueeze(1), embed_x_history.unsqueeze(1)],dim=1)
+        embed_x_history_text = embed_x_history_new
+        embed_x_history = torch.cat([embed_x_history_image.unsqueeze(1), embed_x_history_text.unsqueeze(1), embed_x_history.unsqueeze(1)],dim=1)
         concat_self_embedding_features_without_mlp = torch.cat([concat_self_embedding_features_without_mlp, embed_x_target], dim=1)
         target_tensor = self.Norm(concat_self_embedding_features_without_mlp.unsqueeze(2))
 
@@ -235,21 +235,21 @@ class Diff_MSIN(nn.Module):
         
         for m in range(self.expert_nets): 
             prefer_presentation = target_tensor[:,m]
-            prefer_low_capsule = self.interest_extract_list[m](low_capsule[:,m])+low_capsule[:,m]
-            prefer_presentations.append(prefer_low_capsule.unsqueeze(1))
+            prefer_embed_x_history = self.interest_extract_list[m](embed_x_history[:,m])+embed_x_history[:,m]
+            prefer_presentations.append(prefer_embed_x_history.unsqueeze(1))
             target_presentations.append(prefer_presentation.unsqueeze(1))
 
-        low_capsule_fusion = torch.mean(low_capsule,dim=1).unsqueeze(1)
+        embed_x_history_fusion = torch.mean(embed_x_history,dim=1).unsqueeze(1)
         target_tensor_fusion = torch.mean(target_tensor,dim=1).unsqueeze(1)
 
         for m in range(self.common_expert_num): 
             prefer_presentation = target_tensor_fusion
-            prefer_low_capsule = self.public_expert_net[m](low_capsule_fusion)+low_capsule_fusion
-            prefer_presentations.append(prefer_low_capsule)
+            prefer_embed_x_history = self.public_expert_net[m](embed_x_history_fusion)+embed_x_history_fusion
+            prefer_presentations.append(prefer_embed_x_history)
             target_presentations.append(prefer_presentation)
         
         prefer_presentations = torch.cat(prefer_presentations,dim=1)
-        h_syn = self.src_module(prefer_presentations).unsqueeze(1)+low_capsule_fusion
+        h_syn = self.src_module(prefer_presentations).unsqueeze(1)+embed_x_history_fusion
         loss_syn = self.src_module.loss_syn(h_syn, target_tensor_fusion)
 
         prefer_presentations = torch.cat([prefer_presentations,h_syn],dim=1)
